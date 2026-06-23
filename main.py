@@ -18,6 +18,7 @@ from d435_camera import D435Camera
 from detector import TipDetector
 from serial_comm import SerialComm
 from dm02_serial import DM02Serial
+from anti_light import filter_detections
 
 
 # ===== 配置 =====
@@ -35,7 +36,15 @@ SEND_INTERVAL = 0.05
 # DM02 机械臂
 USE_DM02 = False
 DM02_PORT = "/dev/ttyACM0"
-TARGET_CLASSES = ['WQ']
+TARGET_CLASSES = [
+    'WQ',           # 武器头/抓取点 (武馆)
+    # 'R_R1',       # R1 KFS (梅林)
+    # 'T03','T04','T05','T06','T07','T08','T09','T10','T11',
+    # 'T12','T13','T14','T15','T16','T17',    # R2 KFS (梅林)
+]
+
+# 抗灯光
+MIN_VARIANCE = 100
 
 
 async def async_detect(detector, frame):
@@ -97,6 +106,7 @@ def main():
     print("=" * 50)
 
     last_send_time = 0
+    last_heartbeat = 0
 
     try:
         while True:
@@ -118,7 +128,8 @@ def main():
             # YOLO检测
             all_detections, annotated = asyncio.run(async_detect(detector, color_image))
 
-            # 过滤目标类别
+            # 抗灯光过滤 + 目标类别过滤
+            all_detections = filter_detections(color_image, all_detections, min_variance=MIN_VARIANCE)
             target_dets = [d for d in all_detections if d['class_name'] in TARGET_CLASSES]
 
             # 深度图可视化
@@ -126,8 +137,8 @@ def main():
                 cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
 
             if target_dets:
-                # 取置信度最高的
-                best = max(target_dets, key=lambda d: d['confidence'])
+                # 选面积最大的
+                best = max(target_dets, key=lambda d: (d['bbox'][2]-d['bbox'][0]) * (d['bbox'][3]-d['bbox'][1]))
                 cx, cy = best['center']
                 cls_name = best['class_name']
                 conf = best['confidence']
@@ -162,6 +173,10 @@ def main():
                     print(f"\r[{cls_name}] 像素:({cx},{cy}) 深度无效", end="")
             else:
                 print(f"\r未检测到目标", end="")
+                # 心跳: 每秒发一次
+                if dm02 and time.time() - last_heartbeat > 1.0:
+                    dm02.send_heartbeat()
+                    last_heartbeat = time.time()
 
             # 显示
             cv2.imshow("Tip Detect", annotated)
