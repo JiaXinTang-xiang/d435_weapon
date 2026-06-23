@@ -17,10 +17,11 @@ import pyrealsense2 as rs
 from d435_camera import D435Camera
 from detector import TipDetector
 from serial_comm import SerialComm
+from dm02_serial import DM02Serial
 
 
 # ===== 配置 =====
-MODEL_PATH = "model/best.pt"
+MODEL_PATH = "model/best2.pt"
 CONF = 0.5
 IOU = 0.7
 WIDTH = 640
@@ -29,9 +30,12 @@ FPS = 30
 
 USE_SERIAL = False
 SERIAL_PORT = "/dev/ttyUSB0"
-
-# 串口发送间隔(秒)
 SEND_INTERVAL = 0.05
+
+# DM02 机械臂
+USE_DM02 = False
+DM02_PORT = "/dev/ttyACM0"
+TARGET_CLASSES = ['WQ']
 
 
 async def async_detect(detector, frame):
@@ -80,6 +84,13 @@ def main():
         if not ser.open(port=SERIAL_PORT):
             ser = None
 
+    dm02 = None
+    if USE_DM02:
+        dm02 = DM02Serial(port=DM02_PORT)
+        if not dm02.open():
+            print("DM02 串口打开失败，继续运行(无DM02模式)")
+            dm02 = None
+
     intrinsics_saved = False
 
     print("\n按 Q 退出 | 按 S 保存截图")
@@ -105,67 +116,52 @@ def main():
                 intrinsics_saved = True
 
             # YOLO检测
-            zhua_list, quan_list, annotated = asyncio.run(async_detect(detector, color_image))
+            all_detections, annotated = asyncio.run(async_detect(detector, color_image))
 
-            detected_any = False
-
-            # 单独显示zhua(抓取点) + 3D坐标
-            for zhua in zhua_list:
-                detected_any = True
-                gx, gy = zhua['center']
-                grab_3d = camera.get_3d_point(gx, gy, depth_frame)
-
-                cv2.circle(annotated, (gx, gy), 6, (0, 0, 255), -1)
-                cv2.putText(annotated, "zhua", (gx + 10, gy - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-
-                if grab_3d:
-                    info = f"({grab_3d['x']:.3f}, {grab_3d['y']:.3f}, {grab_3d['z']:.3f})m"
-                    cv2.putText(annotated, info, (gx + 10, gy + 15),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
-                    print(f"\r[zhua] 抓取点: ({grab_3d['x']:.3f}, {grab_3d['y']:.3f}, {grab_3d['z']:.3f})m "
-                          f"距离:{grab_3d['distance']:.3f}m", end="")
-                else:
-                    print(f"\r[zhua] 像素:({gx},{gy}) 深度无效", end="")
-
-            # 单独显示quan(武器头)
-            for quan in quan_list:
-                detected_any = True
-                qx, qy = quan['center']
-                cv2.putText(annotated, "quan", (qx + 10, qy - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
-                print(f"\r[quan] 像素:({qx},{qy}) 置信度:{quan['confidence']:.0%}", end="")
-
-            # 配对: quan+zhua都有时画配对线
-            pairs = find_tip_grab_pairs(zhua_list, quan_list)
-            for quan_det, zhua_det in pairs:
-                cv2.line(annotated, quan_det['center'], zhua_det['center'], (0, 255, 0), 1)
-
-            # 串口: 有配对时发送抓取数据
-            if pairs:
-                gx, gy = pairs[0][1]['center']
-                grab_3d = camera.get_3d_point(gx, gy, depth_frame)
-                if grab_3d and ser and time.time() - last_send_time > SEND_INTERVAL:
-                    ser.send_grab_data('quan', grab_3d)
-                    last_send_time = time.time()
-            elif ser:
-                ser.send_grab_data(None, None)
-
-            # 全都没检测到
-            if not detected_any:
-                print(f"\r未检测到目标", end="")
+            # 过滤目标类别
+            target_dets = [d for d in all_detections if d['class_name'] in TARGET_CLASSES]
 
             # 深度图可视化
             depth_colormap = cv2.applyColorMap(
                 cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
 
-            # 在深度图上标抓取点
-            for zhua in zhua_list:
-                gx, gy = zhua['center']
-                cv2.circle(depth_colormap, (gx, gy), 6, (0, 255, 255), -1)
-                d = depth_image[gy, gx] * camera.depth_scale
-                cv2.putText(depth_colormap, f"{d:.3f}m", (gx + 10, gy),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+            if target_dets:
+                # 取置信度最高的
+                best = max(target_dets, key=lambda d: d['confidence'])
+                cx, cy = best['center']
+                cls_name = best['class_name']
+                conf = best['confidence']
+
+                grab_3d = camera.get_3d_point(cx, cy, depth_frame)
+
+                cv2.circle(annotated, (cx, cy), 6, (0, 0, 255), -1)
+                label = f"{cls_name} {conf:.0%}"
+                cv2.putText(annotated, label, (cx + 10, cy - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
+                if grab_3d:
+                    info = f"({grab_3d['x']:.3f}, {grab_3d['y']:.3f}, {grab_3d['z']:.3f})m"
+                    cv2.putText(annotated, info, (cx + 10, cy + 15),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+                    cv2.circle(depth_colormap, (cx, cy), 6, (0, 255, 255), -1)
+                    print(f"\r[{cls_name}] ({grab_3d['x']:.3f},{grab_3d['y']:.3f},{grab_3d['z']:.3f})m "
+                          f"距离:{grab_3d['distance']:.3f}m  conf:{conf:.0%}", end="")
+
+                    # DM02 发送
+                    if dm02:
+                        x_mm = round(grab_3d['x'] * 1000, 1)
+                        y_mm = round(grab_3d['y'] * 1000, 1)
+                        z_mm = round(grab_3d['z'] * 1000, 1)
+                        dm02.send_position_only(x_mm, y_mm, z_mm, class_id=best['class_id'])
+
+                    # 串口发送
+                    if ser and time.time() - last_send_time > SEND_INTERVAL:
+                        ser.send_grab_data(cls_name, grab_3d)
+                        last_send_time = time.time()
+                else:
+                    print(f"\r[{cls_name}] 像素:({cx},{cy}) 深度无效", end="")
+            else:
+                print(f"\r未检测到目标", end="")
 
             # 显示
             cv2.imshow("Tip Detect", annotated)
@@ -185,6 +181,9 @@ def main():
         if ser:
             ser.send_grab_data(None, None)
             ser.close()
+        if dm02:
+            dm02.send_stop()
+            dm02.close()
         camera.stop()
         cv2.destroyAllWindows()
         print("\n退出")

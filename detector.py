@@ -17,17 +17,13 @@ class TipDetector:
         print(f"模型加载完成 | 设备:{self.device} | 类别:{self.model.names}")
 
     def detect(self, frame):
-        """
-        检测结果:
-            zhua_list: 抓取点列表 [{'center':(cx,cy), 'bbox':.., 'confidence':..}]
-            quan_list: 拳头列表   [{'center':(cx,cy), 'bbox':.., 'confidence':..}]
+        """返回所有检测结果
+            all_detections: [{'bbox':.., 'center':(cx,cy), 'confidence':.., 'class_name':.., 'class_id':..}]
             annotated: 标注后的图像
         """
         results = self.model(frame, conf=self.conf, iou=self.iou, verbose=False)
 
-        zhua_list = []
-        quan_list = []
-
+        all_detections = []
         for r in results:
             for box in r.boxes:
                 xyxy = box.xyxy[0].cpu().numpy().astype(int)
@@ -39,17 +35,13 @@ class TipDetector:
                 cx = (x1 + x2) // 2
                 cy = (y1 + y2) // 2
 
-                det = {
+                all_detections.append({
                     'bbox': [x1, y1, x2, y2],
                     'center': (cx, cy),
                     'confidence': conf,
+                    'class_id': cls_id,
                     'class_name': cls_name
-                }
-
-                if cls_name == 'zhua':
-                    zhua_list.append(det)
-                elif cls_name == 'quan':
-                    quan_list.append(det)
+                })
 
         annotated = results[0].plot()
-        return zhua_list, quan_list, annotated
+        return all_detections, annotated
