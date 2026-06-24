@@ -65,7 +65,7 @@ class DM02Serial:
             34 bytes frame
         """
         # 打包: 帧头+CMD+6浮点+gripper+CRC+class_id = 29 bytes, 补齐到34
-        data = struct.pack('<BBffffffBBB',
+        data = struct.pack('<BBfffffffBBB',
                            FRAME_HEADER,
                            CMD_MOVE,
                            x_mm, y_mm, z_mm,

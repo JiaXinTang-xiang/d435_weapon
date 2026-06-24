@@ -13,10 +13,8 @@ import cv2
 import json
 import time
 import asyncio
-import pyrealsense2 as rs
 from d435_camera import D435Camera
 from detector import TipDetector
-from serial_comm import SerialComm
 from dm02_serial import DM02Serial
 from anti_light import filter_detections
 
@@ -29,12 +27,8 @@ WIDTH = 640
 HEIGHT = 480
 FPS = 30
 
-USE_SERIAL = False
-SERIAL_PORT = "/dev/ttyUSB0"
-SEND_INTERVAL = 0.05
-
-# DM02 机械臂
-USE_DM02 = False
+# DM02 机械臂串口
+USE_DM02 = True
 DM02_PORT = "/dev/ttyACM0"
 # 比赛模式: 'wuguan' 或 'meilin'
 MATCH_MODE = 'wuguan'
@@ -92,13 +86,6 @@ def main():
     camera = D435Camera(width=WIDTH, height=HEIGHT, fps=FPS)
     detector = TipDetector(model_path=MODEL_PATH, conf=CONF, iou=IOU)
 
-    ser = None
-    if USE_SERIAL:
-        ser = SerialComm()
-        ser.list_ports()
-        if not ser.open(port=SERIAL_PORT):
-            ser = None
-
     dm02 = None
     if USE_DM02:
         dm02 = DM02Serial(port=DM02_PORT)
@@ -111,7 +98,6 @@ def main():
     print("\n按 Q 退出 | 按 S 保存截图")
     print("=" * 50)
 
-    last_send_time = 0
     last_heartbeat = 0
     send_idx = 0
 
@@ -180,10 +166,6 @@ def main():
                         z_mm = round(grab_3d['z'] * 1000, 1)
                         dm02.send_position_only(x_mm, y_mm, z_mm, class_id=best['class_id'])
 
-                    # 串口发送
-                    if ser and time.time() - last_send_time > SEND_INTERVAL:
-                        ser.send_grab_data(cls_name, grab_3d)
-                        last_send_time = time.time()
                 else:
                     print(f"\r[{cls_name}] 像素:({cx},{cy}) 深度无效", end="")
             else:
@@ -208,9 +190,6 @@ def main():
         print("\n用户中断")
 
     finally:
-        if ser:
-            ser.send_grab_data(None, None)
-            ser.close()
         if dm02:
             dm02.send_stop()
             dm02.close()
