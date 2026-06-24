@@ -36,16 +36,22 @@ SEND_INTERVAL = 0.05
 # DM02 机械臂
 USE_DM02 = False
 DM02_PORT = "/dev/ttyACM0"
-TARGET_CLASSES = [
-    'WQ',           # 武器头/抓取点 (武馆)
-    # 'R_R1',       # R1 KFS (梅林)
-    # 'T03','T04','T05','T06','T07','T08','T09','T10','T11',
-    # 'T12','T13','T14','T15','T16','T17',    # R2 KFS (梅林)
-]
+# 比赛模式: 'wuguan' 或 'meilin'
+MATCH_MODE = 'wuguan'
+
+# 目标类别 (按模式)
+TARGET_CLASSES_MAP = {
+    'wuguan': ['WQ'],                                    # 武馆: 抓取点
+    'meilin': [f'T{i:02d}' for i in range(3, 18)],       # 梅林: R2 KFS (15种甲骨文)
+}
+
+TARGET_CLASSES = TARGET_CLASSES_MAP[MATCH_MODE]
+
+# 最多发送目标数
+MAX_SEND_TARGETS = 4
 
 # 抗灯光
 MIN_VARIANCE = 100
-
 
 async def async_detect(detector, frame):
     return detector.detect(frame)
@@ -107,6 +113,7 @@ def main():
 
     last_send_time = 0
     last_heartbeat = 0
+    send_idx = 0
 
     try:
         while True:
@@ -137,8 +144,15 @@ def main():
                 cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
 
             if target_dets:
-                # 选面积最大的
-                best = max(target_dets, key=lambda d: (d['bbox'][2]-d['bbox'][0]) * (d['bbox'][3]-d['bbox'][1]))
+                # 按面积排序, 取前 MAX_SEND_TARGETS 个
+                target_dets.sort(key=lambda d: (d['bbox'][2]-d['bbox'][0]) * (d['bbox'][3]-d['bbox'][1]), reverse=True)
+                target_dets = target_dets[:MAX_SEND_TARGETS]
+
+                # 轮流发送: 每帧发一个目标
+                send_idx = send_idx % len(target_dets)
+                best = target_dets[send_idx]
+                send_idx += 1
+
                 cx, cy = best['center']
                 cls_name = best['class_name']
                 conf = best['confidence']
@@ -155,8 +169,9 @@ def main():
                     cv2.putText(annotated, info, (cx + 10, cy + 15),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
                     cv2.circle(depth_colormap, (cx, cy), 6, (0, 255, 255), -1)
-                    print(f"\r[{cls_name}] ({grab_3d['x']:.3f},{grab_3d['y']:.3f},{grab_3d['z']:.3f})m "
-                          f"距离:{grab_3d['distance']:.3f}m  conf:{conf:.0%}", end="")
+                    print(f"\r[{cls_name}] {len(target_dets)}目标 "
+                          f"({grab_3d['x']:.3f},{grab_3d['y']:.3f},{grab_3d['z']:.3f})m "
+                          f"conf:{conf:.0%}", end="")
 
                     # DM02 发送
                     if dm02:

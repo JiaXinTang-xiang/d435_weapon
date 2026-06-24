@@ -18,7 +18,7 @@ FRAME_HEADER = 0xAA
 FRAME_SIZE   = 34
 
 # 命令
-CMD_MOVE      = 0x01   # 移动到目标位姿
+CMD_MOVE      = 0x01   # 移动到目标位姿 (抓取)
 CMD_STOP      = 0x02   # 急停
 CMD_HOME      = 0x03   # 回零
 CMD_HEARTBEAT = 0x04   # 心跳 (上位机存活信号)
@@ -64,7 +64,7 @@ class DM02Serial:
         Returns:
             34 bytes frame
         """
-        # 打包: 帧头+CMD+6浮点+gripper+CRC+class_id = 34 bytes
+        # 打包: 帧头+CMD+6浮点+gripper+CRC+class_id = 29 bytes, 补齐到34
         data = struct.pack('<BBffffffBBB',
                            FRAME_HEADER,
                            CMD_MOVE,
@@ -73,7 +73,7 @@ class DM02Serial:
                            gripper,
                            class_id,
                            0x00)  # reserved
-        return data
+        return data + b'\x00' * (FRAME_SIZE - len(data))
 
     def _build_stop_frame(self):
         """构建急停帧"""
@@ -136,6 +136,11 @@ class DM02Serial:
     def send_heartbeat(self):
         """发送心跳 (上位机存活信号)"""
         self._write(self._build_heartbeat_frame())
+
+    def send_config(self, mode):
+        """发送配置帧: 0=wuguan, 1=meilin"""
+        data = struct.pack('<BBB', FRAME_HEADER, CMD_CONFIG, mode)
+        self._write(data + b'\x00' * (FRAME_SIZE - len(data)))
 
     def _write(self, frame):
         """写串口"""
