@@ -1,6 +1,6 @@
 #!/bin/bash
 # tip_detect_project 启动脚本
 
-cd /home/jiaxintang/桌面/model_wuqi/tip_detect_project
-source ~/yolo-project/.venv/bin/activate
+cd /home/ga/tip_detect_project
+source ~/miniconda3/bin/activate yolo
 python main.py
